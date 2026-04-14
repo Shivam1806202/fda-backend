@@ -34,7 +34,9 @@ class _HomePageState extends State<HomePage> {
   String? downloadUrl;
   int? totalRecords;
 
+  // ==============================
   // 🔥 PICK DATE
+  // ==============================
   Future<void> pickDate(bool isStart) async {
     DateTime? picked = await showDatePicker(
       context: context,
@@ -56,7 +58,9 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  // 🔥 API CALL
+  // ==============================
+  // 🔥 API CALL (FIXED)
+  // ==============================
   Future<void> fetchData() async {
 
     if (drugController.text.isEmpty || startDate.isEmpty || endDate.isEmpty) {
@@ -72,9 +76,13 @@ class _HomePageState extends State<HomePage> {
 
     String drug = drugController.text.trim();
 
+    // 🔥 FIX: Extract YEAR only
+    String startYear = startDate.substring(0, 4);
+    String endYear = endDate.substring(0, 4);
+
     try {
       final response = await http.get(Uri.parse(
-          "https://fda-backend-9nus.onrender.com/download?drug=$drug&start=$startDate&end=$endDate"
+          "https://fda-backend-9nus.onrender.com/download?drug=$drug&start_year=$startYear&end_year=$endYear"
       ));
 
       if (response.statusCode == 200) {
@@ -86,8 +94,9 @@ class _HomePageState extends State<HomePage> {
         });
 
       } else {
-        showError("Server error");
+        showError("Server error: ${response.statusCode}");
       }
+
     } catch (e) {
       showError("Connection error");
     }
@@ -95,20 +104,33 @@ class _HomePageState extends State<HomePage> {
     setState(() => loading = false);
   }
 
-  // 🔥 ERROR
+  // ==============================
+  // 🔥 ERROR HANDLER
+  // ==============================
   void showError(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(msg))
     );
   }
 
+  // ==============================
   // 🔥 OPEN FILE
+  // ==============================
   Future<void> openFile() async {
     if (downloadUrl != null) {
-      await launchUrl(Uri.parse(downloadUrl!));
+      final uri = Uri.parse(downloadUrl!);
+
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      } else {
+        showError("Cannot open file");
+      }
     }
   }
 
+  // ==============================
+  // UI
+  // ==============================
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -171,7 +193,7 @@ class _HomePageState extends State<HomePage> {
 
             SizedBox(height: 20),
 
-            // 🔹 Result
+            // 🔹 Result Card
             if (totalRecords != null)
               Card(
                 elevation: 3,
@@ -208,7 +230,6 @@ class _HomePageState extends State<HomePage> {
                 ),
                 child: Text("Download Excel"),
               ),
-
           ],
         ),
       ),

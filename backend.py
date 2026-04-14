@@ -7,7 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 import pandas as pd
 import time
-import datetime
 import os
 import json
 
@@ -49,13 +48,6 @@ firebase_admin.initialize_app(cred, {
 # ==============================
 # ✅ HELPER FUNCTIONS
 # ==============================
-def convert_role(code):
-    return {
-        "1": "Primary",
-        "2": "Secondary",
-        "3": "Concomitant"
-    }.get(str(code), code)
-
 
 def convert_gender(code):
     return {
@@ -64,39 +56,62 @@ def convert_gender(code):
     }.get(str(code), "Unknown")
 
 
-def convert_route_list(route_string):
-    if not route_string:
-        return "Unknown"
+def convert_role(code):
+    return {
+        "1": "Primary Suspect",
+        "2": "Secondary Suspect",
+        "3": "Concomitant"
+    }.get(str(code), "Unknown")
 
-    route_map = {
+
+def convert_route(code):
+    return {
         "001": "Oral",
         "002": "Intravenous",
         "003": "Intramuscular",
         "004": "Subcutaneous",
-        "030": "Oral",
-        "042": "Intramuscular",
-        "048": "Subcutaneous",
-        "058": "Subcutaneous",
-        "065": "Subcutaneous"
+        "058": "Subcutaneous"
+    }.get(str(code), "Unknown")
+
+
+def parse_dose(d):
+    """
+    Combine structured dose fields safely
+    """
+    num = d.get("drugstructuredosagenumb", "")
+    unit = d.get("drugstructuredosageunit", "")
+
+    unit_map = {
+        "001": "mg",
+        "002": "g",
+        "003": "ml"
     }
 
-    codes = [c.strip() for c in str(route_string).split(",") if c.strip()]
-    routes = [route_map.get(code, "Unknown") for code in codes]
+    unit_text = unit_map.get(str(unit), "")
 
-    return ", ".join(set(routes))
-
-
-def get_manufacturer(drug_name):
-    drug_name = drug_name.lower()
-
-    if any(x in drug_name for x in ["semaglutide", "ozempic", "wegovy", "rybelsus"]):
-        return "Novo Nordisk"
-    if "aspirin" in drug_name:
-        return "Bayer"
-    if "metformin" in drug_name:
-        return "Various"
+    if num:
+        return f"{num} {unit_text}".strip()
 
     return "Unknown"
+
+
+def get_seriousness(report):
+    return {
+        "Serious": "Yes" if report.get("serious") == "1" else "No",
+        "Death": "Yes" if report.get("seriousnessdeath") == "1" else "No",
+        "Hospitalization": "Yes" if report.get("seriousnesshospitalization") == "1" else "No",
+        "Life Threatening": "Yes" if report.get("seriousnesslifethreatening") == "1" else "No"
+    }
+
+
+def reporter_qualification(code):
+    return {
+        "1": "Physician",
+        "2": "Pharmacist",
+        "3": "Other HCP",
+        "4": "Lawyer",
+        "5": "Consumer"
+    }.get(str(code), "Unknown")
 
 
 # ==============================
@@ -115,9 +130,6 @@ def download(drug: str, start_year: int, end_year: int):
 
     all_data = []
 
-    # ==============================
-    # 🔥 YEAR LOOP (IMPORTANT FIX)
-    # ==============================
     for year in range(start_year, end_year + 1):
 
         start = f"{year}0101"
@@ -149,6 +161,15 @@ def download(drug: str, start_year: int, end_year: int):
                     case_id = report.get("safetyreportid", "")
                     country = report.get("primarysourcecountry", "")
 
+                    # 🔥 Seriousness
+                    seriousness = get_seriousness(report)
+
+                    # 🔥 Reporter
+                    reporter = report.get("primarysource", {})
+                    qualification = reporter_qualification(
+                        reporter.get("qualification", "")
+                    )
+
                     patient = report.get("patient", {})
                     age = patient.get("patientonsetage", "")
                     gender = convert_gender(patient.get("patientsex", ""))
@@ -156,42 +177,58 @@ def download(drug: str, start_year: int, end_year: int):
 
                     drugs = patient.get("drug", [])
 
-                    drug_names = []
-                    brand_names = []
-                    roles = []
-                    routes = []
-                    start_dates = []
-                    end_dates = []
+                    primary_drug = ""
+                    secondary_drugs = []
+                    concomitant_drugs = []
+                    dose = ""
+                    indication = ""
+                    route = ""
 
                     for d in drugs:
-                        name = d.get("medicinalproduct", "")
-                        brand = d.get("openfda", {}).get("brand_name", [])
+                        role = convert_role(d.get("drugcharacterization", ""))
 
-                        drug_names.append(name)
-                        roles.append(convert_role(d.get("drugcharacterization", "")))
-                        routes.append(convert_route_list(d.get("drugadministrationroute", "")))
-                        start_dates.append(str(d.get("drugstartdate", "")))
-                        end_dates.append(str(d.get("drugenddate", "")))
+                        if role == "Primary Suspect":
+                            primary_drug = d.get("medicinalproduct", "")
+                            dose = parse_dose(d)
+                            indication = d.get("drugindication", "")
+                            route = convert_route(d.get("drugadministrationroute", ""))
 
-                        if brand:
-                            brand_names.extend(brand)
+                        elif role == "Secondary Suspect":
+                            secondary_drugs.append(d.get("medicinalproduct", ""))
+
+                        elif role == "Concomitant":
+                            concomitant_drugs.append(d.get("medicinalproduct", ""))
 
                     reactions = patient.get("reaction", [])
-                    adr_list = ", ".join([r.get("reactionmeddrapt", "") for r in reactions])
+                    adr_list = ", ".join(
+                        [r.get("reactionmeddrapt", "") for r in reactions]
+                    )
 
                     all_data.append({
                         "Case ID": case_id,
+                        "Country": country,
                         "Age": age,
                         "Gender": gender,
                         "Weight": weight,
-                        "Country": country,
-                        "Drugs": ", ".join(drug_names),
-                        "Brand Names": ", ".join(set(brand_names)) if brand_names else "Unknown",
-                        "Manufacturer": get_manufacturer(drug),
-                        "Drug Role": ", ".join(roles),
-                        "Route": ", ".join(set(routes)),
-                        "Start Date": ", ".join(start_dates),
-                        "End Date": ", ".join(end_dates),
+
+                        # 🔴 Seriousness
+                        "Serious": seriousness["Serious"],
+                        "Death": seriousness["Death"],
+                        "Hospitalization": seriousness["Hospitalization"],
+                        "Life Threatening": seriousness["Life Threatening"],
+
+                        # 💊 Drug Info
+                        "Primary Drug": primary_drug,
+                        "Secondary Drugs": ", ".join(secondary_drugs),
+                        "Concomitant Drugs": ", ".join(concomitant_drugs),
+                        "Dose": dose,
+                        "Route": route,
+                        "Indication": indication,
+
+                        # 👨‍⚕️ Reporter
+                        "Reporter Qualification": qualification,
+
+                        # ⚠️ ADR
                         "ADR": adr_list
                     })
 
