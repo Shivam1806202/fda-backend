@@ -3,6 +3,7 @@
 # ==============================
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware   # 🔥 ADD THIS
 import requests
 import pandas as pd
 import time
@@ -19,6 +20,15 @@ from firebase_admin import credentials, storage
 # ✅ 2. INIT FASTAPI
 # ==============================
 app = FastAPI()
+
+# 🔥 CORS ENABLE (VERY IMPORTANT FOR FLUTTER WEB)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],   # allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ==============================
@@ -123,7 +133,6 @@ def download(drug: str, start: str, end: str):
             time.sleep(3)
             continue
 
-        # 🔥 FULL DATA EXTRACTION
         for report in data:
             try:
                 case_id = report.get("safetyreportid", "")
@@ -168,9 +177,6 @@ def download(drug: str, start: str, end: str):
         time.sleep(1)
 
 
-    # ==============================
-    # ✅ DATAFRAME
-    # ==============================
     df = pd.DataFrame(all_data)
 
     if df.empty:
@@ -182,16 +188,10 @@ def download(drug: str, start: str, end: str):
     df["Manufacturer"] = df["Drugs"].apply(get_manufacturer)
 
 
-    # ==============================
-    # ✅ SAVE EXCEL
-    # ==============================
     filename = f"{drug}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
     df.to_excel(filename, index=False)
 
 
-    # ==============================
-    # 🔥 UPLOAD TO FIREBASE
-    # ==============================
     bucket = storage.bucket()
     blob = bucket.blob(f"reports/{filename}")
 
@@ -201,9 +201,6 @@ def download(drug: str, start: str, end: str):
     file_url = blob.public_url
 
 
-    # ==============================
-    # ✅ RESPONSE
-    # ==============================
     return JSONResponse({
         "message": "File uploaded successfully",
         "total_records": len(df),

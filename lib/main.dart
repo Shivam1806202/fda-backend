@@ -74,7 +74,7 @@ class _HomePageState extends State<HomePage> {
 
     try {
       final response = await http.get(Uri.parse(
-          "http://157.39.65.220:8000/download?drug=$drug&start=$startDate&end=$endDate"
+          "https://fda-backend-9nus.onrender.com/download?drug=$drug&start=$startDate&end=$endDate"
       ));
 
       if (response.statusCode == 200) {
