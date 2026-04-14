@@ -3,7 +3,7 @@
 # ==============================
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware   # 🔥 ADD THIS
+from fastapi.middleware.cors import CORSMiddleware
 import requests
 import pandas as pd
 import time
@@ -11,7 +11,7 @@ import datetime
 import os
 import json
 
-# 🔥 Firebase
+# Firebase
 import firebase_admin
 from firebase_admin import credentials, storage
 
@@ -21,10 +21,9 @@ from firebase_admin import credentials, storage
 # ==============================
 app = FastAPI()
 
-# 🔥 CORS ENABLE (VERY IMPORTANT FOR FLUTTER WEB)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # allow all origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -32,16 +31,14 @@ app.add_middleware(
 
 
 # ==============================
-# 🔥 3. INIT FIREBASE (SECURE)
+# 🔥 3. INIT FIREBASE
 # ==============================
-
 firebase_json = os.environ.get("FIREBASE_KEY")
 
 if not firebase_json:
     raise ValueError("FIREBASE_KEY environment variable not set")
 
 cred_dict = json.loads(firebase_json)
-
 cred = credentials.Certificate(cred_dict)
 
 firebase_admin.initialize_app(cred, {
@@ -52,7 +49,6 @@ firebase_admin.initialize_app(cred, {
 # ==============================
 # ✅ HELPER FUNCTIONS
 # ==============================
-
 def convert_role(code):
     return {
         "1": "Primary",
@@ -90,93 +86,124 @@ def convert_route_list(route_string):
     return ", ".join(set(routes))
 
 
-def get_manufacturer(drug):
-    if any(x in drug.lower() for x in ["semaglutide", "ozempic", "wegovy", "rybelsus"]):
+def get_manufacturer(drug_name):
+    drug_name = drug_name.lower()
+
+    if any(x in drug_name for x in ["semaglutide", "ozempic", "wegovy", "rybelsus"]):
         return "Novo Nordisk"
+    if "aspirin" in drug_name:
+        return "Bayer"
+    if "metformin" in drug_name:
+        return "Various"
+
     return "Unknown"
 
 
 # ==============================
-# ✅ OPTIONAL HOME ROUTE
+# ✅ HOME ROUTE
 # ==============================
-
 @app.get("/")
 def home():
     return {"status": "API working 🚀"}
 
 
 # ==============================
-# ✅ MAIN API
+# 🚀 MAIN DOWNLOAD API
 # ==============================
-
 @app.get("/download")
-def download(drug: str, start: str, end: str):
+def download(drug: str, start_year: int, end_year: int):
 
     all_data = []
-    limit = 100
-    skip = 0
 
-    while True:
-        url = f"https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct:{drug}+AND+receivedate:[{start}+TO+{end}]&limit={limit}&skip={skip}"
+    # ==============================
+    # 🔥 YEAR LOOP (IMPORTANT FIX)
+    # ==============================
+    for year in range(start_year, end_year + 1):
 
-        try:
-            response = requests.get(url, timeout=30)
+        start = f"{year}0101"
+        end = f"{year}1231"
 
-            if response.status_code != 200:
-                break
+        skip = 0
+        limit = 100
 
-            data = response.json().get("results", [])
-            if not data:
-                break
+        while True:
 
-        except:
-            time.sleep(3)
-            continue
+            url = f"https://api.fda.gov/drug/event.json?search=patient.drug.medicinalproduct:{drug}+AND+receivedate:[{start}+TO+{end}]&limit={limit}&skip={skip}"
 
-        for report in data:
             try:
-                case_id = report.get("safetyreportid", "")
-                country = report.get("primarysourcecountry", "")
+                response = requests.get(url, timeout=30)
 
-                patient = report.get("patient", {})
-                age = patient.get("patientonsetage", "")
-                gender = convert_gender(patient.get("patientsex", ""))
-                weight = patient.get("patientweight", "")
+                if response.status_code != 200:
+                    break
 
-                drugs = patient.get("drug", [])
-                drug_info, roles, routes, start_dates, end_dates = [], [], [], [], []
-
-                for d in drugs:
-                    drug_info.append(d.get("medicinalproduct", ""))
-                    roles.append(convert_role(d.get("drugcharacterization", "")))
-                    routes.append(convert_route_list(d.get("drugadministrationroute", "")))
-                    start_dates.append(str(d.get("drugstartdate", "")))
-                    end_dates.append(str(d.get("drugenddate", "")))
-
-                reactions = patient.get("reaction", [])
-                adr_list = ", ".join([r.get("reactionmeddrapt", "") for r in reactions])
-
-                all_data.append({
-                    "Case ID": case_id,
-                    "Age": age,
-                    "Gender": gender,
-                    "Weight": weight,
-                    "Country": country,
-                    "Drugs": ", ".join(drug_info),
-                    "Drug Role": ", ".join(roles),
-                    "Route": ", ".join(set(routes)),
-                    "Start Date": ", ".join(start_dates),
-                    "End Date": ", ".join(end_dates),
-                    "ADR": adr_list
-                })
+                data = response.json().get("results", [])
+                if not data:
+                    break
 
             except:
+                time.sleep(2)
                 continue
 
-        skip += limit
-        time.sleep(1)
+            for report in data:
+                try:
+                    case_id = report.get("safetyreportid", "")
+                    country = report.get("primarysourcecountry", "")
 
+                    patient = report.get("patient", {})
+                    age = patient.get("patientonsetage", "")
+                    gender = convert_gender(patient.get("patientsex", ""))
+                    weight = patient.get("patientweight", "")
 
+                    drugs = patient.get("drug", [])
+
+                    drug_names = []
+                    brand_names = []
+                    roles = []
+                    routes = []
+                    start_dates = []
+                    end_dates = []
+
+                    for d in drugs:
+                        name = d.get("medicinalproduct", "")
+                        brand = d.get("openfda", {}).get("brand_name", [])
+
+                        drug_names.append(name)
+                        roles.append(convert_role(d.get("drugcharacterization", "")))
+                        routes.append(convert_route_list(d.get("drugadministrationroute", "")))
+                        start_dates.append(str(d.get("drugstartdate", "")))
+                        end_dates.append(str(d.get("drugenddate", "")))
+
+                        if brand:
+                            brand_names.extend(brand)
+
+                    reactions = patient.get("reaction", [])
+                    adr_list = ", ".join([r.get("reactionmeddrapt", "") for r in reactions])
+
+                    all_data.append({
+                        "Case ID": case_id,
+                        "Age": age,
+                        "Gender": gender,
+                        "Weight": weight,
+                        "Country": country,
+                        "Drugs": ", ".join(drug_names),
+                        "Brand Names": ", ".join(set(brand_names)) if brand_names else "Unknown",
+                        "Manufacturer": get_manufacturer(drug),
+                        "Drug Role": ", ".join(roles),
+                        "Route": ", ".join(set(routes)),
+                        "Start Date": ", ".join(start_dates),
+                        "End Date": ", ".join(end_dates),
+                        "ADR": adr_list
+                    })
+
+                except:
+                    continue
+
+            skip += limit
+            time.sleep(1)
+
+    # ==============================
+    # ✅ DATAFRAME
+    # ==============================
     df = pd.DataFrame(all_data)
 
     if df.empty:
@@ -184,25 +211,23 @@ def download(drug: str, start: str, end: str):
 
     df = df.drop_duplicates(subset=["Case ID"])
 
-    df["Mechanism of Action"] = "GLP-1 receptor agonist"
-    df["Manufacturer"] = df["Drugs"].apply(get_manufacturer)
-
-
-    filename = f"{drug}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # ==============================
+    # 🔥 SAVE FILE
+    # ==============================
+    filename = f"{drug}_{start_year}_{end_year}.xlsx"
     df.to_excel(filename, index=False)
 
-
+    # ==============================
+    # 🔥 UPLOAD TO FIREBASE
+    # ==============================
     bucket = storage.bucket()
     blob = bucket.blob(f"reports/{filename}")
 
     blob.upload_from_filename(filename)
     blob.make_public()
 
-    file_url = blob.public_url
-
-
     return JSONResponse({
-        "message": "File uploaded successfully",
+        "message": "File uploaded successfully 🚀",
         "total_records": len(df),
-        "download_url": file_url
+        "download_url": blob.public_url
     })
